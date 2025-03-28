@@ -9,47 +9,28 @@ app.use(cors());
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*", // Change to your frontend URL in production
+    origin: "*", // Update with frontend URL in prod
   },
 });
 
-let rooms = {}; // Room data
+let players = [];
 
 io.on("connection", (socket) => {
   console.log(`🟢 Player connected: ${socket.id}`);
+  players.push(socket.id);
 
-  socket.on("create-room", () => {
-    const roomId = Math.random().toString(36).substring(2, 8);
-    rooms[roomId] = { players: [socket.id] };
-    socket.join(roomId);
-    socket.emit("room-created", roomId);
-    console.log(`Room ${roomId} created`);
-  });
+  // Send updated players list to everyone
+  io.emit("players", players);
 
-  socket.on("join-room", (roomId) => {
-    if (rooms[roomId] && rooms[roomId].players.length < 2) {
-      rooms[roomId].players.push(socket.id);
-      socket.join(roomId);
-      io.to(roomId).emit("player-joined", rooms[roomId].players);
-      console.log(`Player ${socket.id} joined room ${roomId}`);
-
-      if (rooms[roomId].players.length === 2) {
-        io.to(roomId).emit("game-start", "Game is starting!");
-      }
-    } else {
-      socket.emit("error", "Room full or not found");
-    }
+  socket.on("startGame", () => {
+    io.emit("startGame");
+    console.log("🔥 Game Started by", socket.id);
   });
 
   socket.on("disconnect", () => {
     console.log(`🔴 Player disconnected: ${socket.id}`);
-    for (let room in rooms) {
-      rooms[room].players = rooms[room].players.filter((id) => id !== socket.id);
-      if (rooms[room].players.length === 0) {
-        delete rooms[room];
-        console.log(`Room ${room} deleted`);
-      }
-    }
+    players = players.filter((id) => id !== socket.id);
+    io.emit("players", players);
   });
 });
 
