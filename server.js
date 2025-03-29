@@ -13,20 +13,16 @@ const io = new Server(server, {
   cors: { origin: "*" },
 });
 
-let players = [];
-let currentQuestion = "";
 let rooms = {};
 
-// 🔥 Random Room ID Generator
+// Generate Room ID
 const generateRoomId = () => {
   return Math.random().toString(36).substring(2, 8);
 };
 
-// ✅ Google Gemini API Call
+// Gemini API Call (Optional)
 const fetchQuestionFromGemini = async () => {
   try {
-    console.log("🚀 Calling Google Gemini API...");
-
     const response = await axios.post(
       "https://us-central1-aiplatform.googleapis.com/v1/projects/YOUR_PROJECT_ID/locations/us-central1/publishers/google/models/YOUR_MODEL_ID:predict",
       {
@@ -40,80 +36,87 @@ const fetchQuestionFromGemini = async () => {
       },
       {
         headers: {
-          Authorization: `Bearer AIzaSyBXJoaREJtOGZNjJ8GQUpCIja0zmPUBxBM`,
+          Authorization: `Bearer YOUR_API_KEY`,
         },
       }
     );
 
     if (response.data?.predictions?.[0]) {
-      currentQuestion = response.data.predictions[0].text.trim();
-      console.log("✅ Question fetched:", currentQuestion);
-      return currentQuestion;
+      return response.data.predictions[0].text.trim();
     } else {
-      console.error("❌ Invalid response:", response.data);
       return "Failed to fetch question";
     }
   } catch (error) {
-    console.error("❌ Gemini API Error:", error.response?.data || error.message);
+    console.error("Gemini API Error:", error.response?.data || error.message);
     return "Error fetching question";
   }
 };
 
-// ✅ Create Room API
+// Room Creation
 app.post("/createroom", (req, res) => {
   const roomId = generateRoomId();
-  rooms[roomId] = { players: [] };
-  console.log("🎯 Room created:", roomId);
+  rooms[roomId] = {
+    players: [],
+    questions: [], // questions will be stored here
+    scores: {},
+    gameStarted: false,
+  };
+  console.log(`🎯 Room created: ${roomId}`);
   res.status(200).json({ roomId });
 });
 
-// ✅ Basic Health Route
+// Health Check
 app.get("/", (req, res) => {
   res.send("🏏 PvP Cricket Quiz Backend Running!");
 });
 
-// ✅ Socket Handling
+// Socket Handling
 io.on("connection", (socket) => {
   console.log(`🟢 Player connected: ${socket.id}`);
-  players.push(socket.id);
-  io.emit("players", players);
 
-  // Join Room
-  socket.on("joinRoom", ({ roomId }) => {
+  socket.on("joinRoom", ({ roomId, playerName }) => {
     if (rooms[roomId]) {
-      rooms[roomId].players.push(socket.id);
-      socket.join(roomId);
-      console.log(`👥 Player ${socket.id} joined room ${roomId}`);
+      rooms[roomId].players.push({ id: socket.id, name: playerName });
+      rooms[roomId].scores[socket.id] = { runs: 0, wickets: 0 };
 
-      // Start quiz when 2 players join
-      if (rooms[roomId].players.length === 2) {
-        io.to(roomId).emit("startQuiz", { roomId });
+      socket.join(roomId);
+      console.log(`👥 Player ${playerName} (${socket.id}) joined room ${roomId}`);
+
+      // Notify players
+      io.to(roomId).emit("players", rooms[roomId].players);
+
+      // Auto start when 2 players joined
+      if (rooms[roomId].players.length === 2 && !rooms[roomId].gameStarted) {
+        startGame(roomId);
       }
     }
   });
 
-  // Start Game - Room & Global
-  socket.on("startGame", async (data) => {
-    if (data?.roomId) {
-      console.log(`🔥 Game started by ${socket.id} in room ${data.roomId}`);
-      const question = await fetchQuestionFromGemini();
-      io.to(data.roomId).emit("new-question", question);
-    } else {
-      console.log(`🔥 Global Game started by ${socket.id}`);
-      const question = await fetchQuestionFromGemini();
-      io.emit("new-question", question);
+  socket.on("submitScore", ({ roomId, runs, wickets }) => {
+    if (rooms[roomId] && rooms[roomId].scores[socket.id]) {
+      rooms[roomId].scores[socket.id] = { runs, wickets };
+      console.log(`🏏 Score Updated: ${socket.id} → ${runs} runs, ${wickets} wickets`);
+
+      // If all players submitted scores → send leaderboard
+      const allSubmitted = Object.values(rooms[roomId].scores).every(
+        (score) => score.runs !== 0 || score.wickets !== 0
+      );
+
+      if (allSubmitted) {
+        const leaderboard = rooms[roomId].players.map((p) => ({
+          name: p.name,
+          ...rooms[roomId].scores[p.id],
+        }));
+        io.to(roomId).emit("showLeaderboard", leaderboard);
+      }
     }
   });
 
-  // Player Disconnect
   socket.on("disconnect", () => {
     console.log(`🔴 Player disconnected: ${socket.id}`);
-    players = players.filter((id) => id !== socket.id);
-    io.emit("players", players);
-
-    // Remove player from room & delete empty rooms
     for (let roomId in rooms) {
-      rooms[roomId].players = rooms[roomId].players.filter((id) => id !== socket.id);
+      rooms[roomId].players = rooms[roomId].players.filter((p) => p.id !== socket.id);
+      delete rooms[roomId].scores[socket.id];
       if (rooms[roomId].players.length === 0) {
         delete rooms[roomId];
         console.log(`🗑️ Room ${roomId} deleted`);
@@ -122,7 +125,35 @@ io.on("connection", (socket) => {
   });
 });
 
-// ✅ Server Start
+// Game Starter Function
+const startGame = (roomId) => {
+  console.log(`🔥 Starting Game in Room ${roomId}`);
+  const staticQuestions = [
+    {
+      question: "Who won the ICC Cricket World Cup in 2019?",
+      options: ["India", "Australia", "England", "New Zealand"],
+      answer: "England",
+    },
+    {
+      question: "Which cricketer is known as the 'God of Cricket'?",
+      options: ["Virat Kohli", "Sachin Tendulkar", "MS Dhoni", "Ricky Ponting"],
+      answer: "Sachin Tendulkar",
+    },
+    {
+      question: "How many players are there in a cricket team?",
+      options: ["9", "10", "11", "12"],
+      answer: "11",
+    },
+  ];
+
+  rooms[roomId].questions = staticQuestions;
+  rooms[roomId].gameStarted = true;
+
+  // Emit Questions to both players
+  io.to(roomId).emit("startQuiz", { questions: staticQuestions });
+};
+
+// Start Server
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
