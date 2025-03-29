@@ -12,7 +12,7 @@ const io = new Server(server, {
   cors: { origin: "*" },
 });
 
-let rooms = {}; // Stores active rooms and players
+let rooms = {};
 
 // Generate Random Room ID
 const generateRoomId = () => Math.random().toString(36).substring(2, 8);
@@ -23,6 +23,19 @@ app.post("/createroom", (req, res) => {
   rooms[roomId] = { players: [], scores: {} };
   console.log("🎯 Room created:", roomId);
   res.status(200).json({ roomId });
+});
+
+// Room Info API (Optional, for debugging)
+app.get("/roominfo/:roomId", (req, res) => {
+  const roomId = req.params.roomId;
+  if (rooms[roomId]) {
+    res.status(200).json({
+      players: rooms[roomId].players,
+      count: rooms[roomId].players.length,
+    });
+  } else {
+    res.status(404).json({ message: "Room not found" });
+  }
 });
 
 // Health Check
@@ -41,11 +54,23 @@ io.on("connection", (socket) => {
       return;
     }
 
-    rooms[roomId].players.push({ id: socket.id, name: playerName, runs: 0, wickets: 0 });
+    // Avoid duplicate joins
+    if (!rooms[roomId].players.find((p) => p.id === socket.id)) {
+      rooms[roomId].players.push({
+        id: socket.id,
+        name: playerName,
+        runs: 0,
+        wickets: 0,
+      });
+    }
+
     socket.join(roomId);
-    
+
     console.log(`👥 Player ${playerName} (${socket.id}) joined room ${roomId}`);
+
+    // Notify all players
     io.to(roomId).emit("playersUpdate", rooms[roomId].players);
+    io.to(roomId).emit("playerCount", rooms[roomId].players.length);
   });
 
   // Start Game
@@ -85,34 +110,36 @@ io.on("connection", (socket) => {
     }
   });
 
-  // End Game & Send Leaderboard
+  // End Game
   socket.on("endGame", ({ roomId }) => {
     if (rooms[roomId]) {
       console.log(`🏆 Game over in room ${roomId}`);
       io.to(roomId).emit("showLeaderboard", rooms[roomId].players);
-      delete rooms[roomId]; // Clean up room after game ends
+      delete rooms[roomId];
     }
   });
 
   // Handle Disconnect
   socket.on("disconnect", () => {
     console.log(`🔴 Player disconnected: ${socket.id}`);
-
     for (const roomId in rooms) {
-      rooms[roomId].players = rooms[roomId].players.filter((p) => p.id !== socket.id);
-
-      // If the room is empty, remove it
-      if (rooms[roomId].players.length === 0) {
-        delete rooms[roomId];
-        console.log(`🗑️ Room ${roomId} deleted (empty)`);
-      } else {
-        io.to(roomId).emit("playersUpdate", rooms[roomId].players);
+      const room = rooms[roomId];
+      const index = room.players.findIndex((p) => p.id === socket.id);
+      if (index !== -1) {
+        room.players.splice(index, 1);
+        io.to(roomId).emit("playersUpdate", room.players);
+        io.to(roomId).emit("playerCount", room.players.length);
+        console.log(`🚪 Player removed from room ${roomId}. Remaining: ${room.players.length}`);
+        if (room.players.length === 0) {
+          delete rooms[roomId];
+          console.log(`🗑️ Room ${roomId} deleted (empty)`);
+        }
       }
     }
   });
 });
 
-// Server Start
+// Start Server
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
