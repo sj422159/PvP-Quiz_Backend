@@ -25,9 +25,15 @@ app.get("/", (req, res) => {
 
 // API: Create Room
 app.post("/createroom", (req, res) => {
+  const { playerName } = req.body;
   const roomId = generateRoomId();
-  rooms[roomId] = { players: [], scores: {} };
-  console.log("🎯 Room Created:", roomId);
+
+  rooms[roomId] = {
+    players: [{ id: "host", name: playerName, runs: 0, wickets: 0 }],
+    scores: {},
+  };
+
+  console.log(`🎯 Room Created: ${roomId} by ${playerName}`);
   res.status(200).json({ roomId });
 });
 
@@ -42,7 +48,9 @@ io.on("connection", (socket) => {
       return;
     }
 
-    // Add player to room
+    // Prevent duplicate host
+    if (rooms[roomId].players.find((p) => p.id === socket.id)) return;
+
     rooms[roomId].players.push({
       id: socket.id,
       name: playerName,
@@ -65,7 +73,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Send quiz questions to room
+  // Send quiz questions
   socket.on("sendQuestions", ({ roomId, questions }) => {
     if (rooms[roomId]) {
       console.log(`📩 Questions sent for Room ${roomId}`);
@@ -94,16 +102,16 @@ io.on("connection", (socket) => {
     }
   });
 
-  // End game and show leaderboard
+  // End game
   socket.on("endGame", ({ roomId }) => {
     if (rooms[roomId]) {
       console.log(`🏆 Game Over in Room ${roomId}`);
       io.to(roomId).emit("showLeaderboard", rooms[roomId].players);
-      delete rooms[roomId]; // Clean up
+      delete rooms[roomId];
     }
   });
 
-  // Handle player disconnection
+  // Handle player disconnect
   socket.on("disconnect", () => {
     console.log(`🔴 Player disconnected: ${socket.id}`);
 
