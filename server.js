@@ -19,7 +19,7 @@ let rooms = {};
 
 // 🔥 Random Room ID Generator
 const generateRoomId = () => {
-  return Math.random().toString(36).substring(2, 8); // e.g. "x9j7k2"
+  return Math.random().toString(36).substring(2, 8);
 };
 
 // ✅ Google Gemini API Call
@@ -30,11 +30,13 @@ const fetchQuestionFromGemini = async () => {
     const response = await axios.post(
       "https://us-central1-aiplatform.googleapis.com/v1/projects/YOUR_PROJECT_ID/locations/us-central1/publishers/google/models/YOUR_MODEL_ID:predict",
       {
-        instances: [{
-          prompt: "Give me a cricket quiz question with options and the correct answer.",
-          temperature: 0.7,
-          max_output_tokens: 150,
-        }],
+        instances: [
+          {
+            prompt: "Give me a cricket quiz question with options and the correct answer.",
+            temperature: 0.7,
+            max_output_tokens: 150,
+          },
+        ],
       },
       {
         headers: {
@@ -43,7 +45,7 @@ const fetchQuestionFromGemini = async () => {
       }
     );
 
-    if (response.data && response.data.predictions && response.data.predictions[0]) {
+    if (response.data?.predictions?.[0]) {
       currentQuestion = response.data.predictions[0].text.trim();
       console.log("✅ Question fetched:", currentQuestion);
       return currentQuestion;
@@ -60,9 +62,7 @@ const fetchQuestionFromGemini = async () => {
 // ✅ Create Room API
 app.post("/createroom", (req, res) => {
   const roomId = generateRoomId();
-  rooms[roomId] = {
-    players: [],
-  };
+  rooms[roomId] = { players: [] };
   console.log("🎯 Room created:", roomId);
   res.status(200).json({ roomId });
 });
@@ -92,17 +92,17 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Start Game
-  socket.on("startGame", async ({ roomId }) => {
-    console.log(`🔥 Game started by ${socket.id} in room ${roomId}`);
-    const question = await fetchQuestionFromGemini();
-    io.to(roomId).emit("new-question", question);
-
-    // Optional auto-question every 10s
-    // setInterval(async () => {
-    //   const question = await fetchQuestionFromGemini();
-    //   io.to(roomId).emit("new-question", question);
-    // }, 10000);
+  // Start Game - Room & Global
+  socket.on("startGame", async (data) => {
+    if (data?.roomId) {
+      console.log(`🔥 Game started by ${socket.id} in room ${data.roomId}`);
+      const question = await fetchQuestionFromGemini();
+      io.to(data.roomId).emit("new-question", question);
+    } else {
+      console.log(`🔥 Global Game started by ${socket.id}`);
+      const question = await fetchQuestionFromGemini();
+      io.emit("new-question", question);
+    }
   });
 
   // Player Disconnect
@@ -111,7 +111,7 @@ io.on("connection", (socket) => {
     players = players.filter((id) => id !== socket.id);
     io.emit("players", players);
 
-    // Remove from room
+    // Remove player from room & delete empty rooms
     for (let roomId in rooms) {
       rooms[roomId].players = rooms[roomId].players.filter((id) => id !== socket.id);
       if (rooms[roomId].players.length === 0) {
